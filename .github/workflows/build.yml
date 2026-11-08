@@ -1,4 +1,4 @@
-name: Tek Dosya Zomboid APK Build
+name: Tek Dosya Zomboid APK
 
 on:
   push:
@@ -9,9 +9,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Depoyu Cek
-        uses: actions/checkout@v4
-
       - name: JDK 17 Kur
         uses: actions/setup-java@v4
         with:
@@ -21,30 +18,21 @@ jobs:
       - name: Android SDK Kur
         uses: android-actions/setup-android@v3
 
-      - name: LibGDX Projesini Otomatik Olustur ve Tek Dosyayi Entegre Et
+      - name: Tum Projeyi ve Oyun Kodunu Tek Seferde Olustur
         run: |
-          mkdir build_temp
-          cd build_temp
-          
-          # Android SDK yolunu tanimla
+          mkdir -p zomboid_build/core/src/com/zomboid/game
+          mkdir -p zomboid_build/android/src/com/zomboid/game
+          cd zomboid_build
+
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          
-          # Gradle ve LibGDX proje yapisini tek komutla olustur
           gradle wrapper --gradle-version 8.5
-          
-          mkdir -p core/src/com/zomboid/game
-          mkdir -p android/src/com/zomboid/game
-          mkdir -p android/res/values
-          
-          # Senin tek ZomboidGame.java dosyani ilgili yere kopyala
-          cp ../ZomboidGame.java core/src/com/zomboid/game/ZomboidGame.java
-          
-          # settings.gradle olustur
+
+          # 1. settings.gradle
           cat << 'EOF' > settings.gradle
           include 'core', 'android'
           EOF
-          
-          # Kok build.gradle olustur
+
+          # 2. Ana build.gradle
           cat << 'EOF' > build.gradle
           buildscript {
               repositories {
@@ -84,7 +72,7 @@ jobs:
           }
           EOF
 
-          # Android modul build.gradle olustur
+          # 3. Android build.gradle
           cat << 'EOF' > android/build.gradle
           android {
               namespace "com.zomboid.game"
@@ -93,7 +81,6 @@ jobs:
                   main {
                       manifest.srcFile 'AndroidManifest.xml'
                       java.srcDirs = ['src']
-                      res.srcDirs = ['res']
                       jniLibs.srcDirs = ['libs']
                   }
               }
@@ -138,12 +125,12 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml olustur (Tam ekran ve Yatay mod)
+          # 4. AndroidManifest.xml
           cat << 'EOF' > android/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application
-                  android:label="Project Zomboid Mobile"
+                  android:label="Zomboid Mobile"
                   android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
                   <activity
                       android:name="com.zomboid.game.AndroidLauncher"
@@ -159,4 +146,240 @@ jobs:
           </manifest>
           EOF
 
-          # AndroidLauncher.java ol
+          # 5. AndroidLauncher.java
+          cat << 'EOF' > android/src/com/zomboid/game/AndroidLauncher.java
+          package com.zomboid.game;
+          import android.os.Bundle;
+          import com.badlogic.gdx.backends.android.AndroidApplication;
+          import com.badlogic.gdx.backends.android.AndroidApplicationConfiguration;
+
+          public class AndroidLauncher extends AndroidApplication {
+              @Override
+              protected void onCreate (Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  AndroidApplicationConfiguration config = new AndroidApplicationConfiguration();
+                  config.useAccelerometer = false;
+                  config.useCompass = false;
+                  initialize(new ZomboidGame(), config);
+              }
+          }
+          EOF
+
+          # 6. ANA OYUN KODU (ZomboidGame.java)
+          cat << 'EOF' > core/src/com/zomboid/game/ZomboidGame.java
+          package com.zomboid.game;
+
+          import com.badlogic.gdx.ApplicationAdapter;
+          import com.badlogic.gdx.Gdx;
+          import com.badlogic.gdx.graphics.GL20;
+          import com.badlogic.gdx.graphics.OrthographicCamera;
+          import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+          import com.badlogic.gdx.math.MathUtils;
+          import com.badlogic.gdx.math.Vector2;
+          import com.badlogic.gdx.math.Vector3;
+          import com.badlogic.gdx.utils.Array;
+
+          public class ZomboidGame extends ApplicationAdapter {
+              private OrthographicCamera gameCam;
+              private OrthographicCamera uiCam;
+              private ShapeRenderer sr;
+
+              private Vector2 playerPos = new Vector2(0, 0);
+              private float playerAngle = 0f;
+              private float playerSpeed = 140f;
+              private float attackCooldown = 0f;
+
+              private static class Zombie {
+                  Vector2 pos = new Vector2();
+                  float hp = 100f;
+                  float knockbackTimer = 0f;
+                  Vector2 knockbackDir = new Vector2();
+              }
+              private Array<Zombie> zombies = new Array<>();
+
+              private int movePointer = -1;
+              private Vector2 moveOrigin = new Vector2();
+              private Vector2 moveCurrent = new Vector2();
+              private Vector2 moveInput = new Vector2();
+
+              private int aimPointer = -1;
+              private Vector2 aimOrigin = new Vector2();
+              private Vector2 aimCurrent = new Vector2();
+              private Vector2 aimInput = new Vector2();
+
+              @Override
+              public void create() {
+                  gameCam = new OrthographicCamera(800, 480);
+                  uiCam = new OrthographicCamera(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+                  uiCam.setToOrtho(false);
+                  sr = new ShapeRenderer();
+
+                  for (int i = 0; i < 15; i++) {
+                      Zombie z = new Zombie();
+                      z.pos.set(MathUtils.random(-500, 500), MathUtils.random(-500, 500));
+                      zombies.add(z);
+                  }
+              }
+
+              @Override
+              public void render() {
+                  float dt = Gdx.graphics.getDeltaTime();
+                  handleInput();
+                  updateLogic(dt);
+
+                  Gdx.gl.glClearColor(0.12f, 0.15f, 0.12f, 1f);
+                  Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+
+                  gameCam.position.lerp(new Vector3(playerPos.x, playerPos.y, 0), 5f * dt);
+                  gameCam.update();
+                  sr.setProjectionMatrix(gameCam.combined);
+
+                  // Izometrik Zemin Cizimi
+                  sr.begin(ShapeRenderer.ShapeType.Line);
+                  sr.setColor(0.2f, 0.25f, 0.2f, 1f);
+                  for (int x = -10; x <= 10; x++) {
+                      for (int y = -10; y <= 10; y++) {
+                          float isoX = (x - y) * 64f;
+                          float isoY = (x + y) * 32f;
+                          sr.line(isoX, isoY + 32, isoX + 64, isoY);
+                          sr.line(isoX + 64, isoY, isoX, isoY - 32);
+                          sr.line(isoX, isoY - 32, isoX - 64, isoY);
+                          sr.line(isoX - 64, isoY, isoX, isoY + 32);
+                      }
+                  }
+                  sr.end();
+
+                  // Karakter ve Zombiler
+                  sr.begin(ShapeRenderer.ShapeType.Filled);
+                  sr.setColor(1f, 1f, 0.2f, 0.5f);
+                  sr.rectLine(playerPos.x, playerPos.y, 
+                      playerPos.x + MathUtils.cosDeg(playerAngle) * 55f, 
+                      playerPos.y + MathUtils.sinDeg(playerAngle) * 55f, 3f);
+
+                  sr.setColor(0.2f, 0.6f, 1f, 1f);
+                  sr.circle(playerPos.x, playerPos.y, 14f);
+
+                  for (Zombie z : zombies) {
+                      sr.setColor(z.knockbackTimer > 0 ? 1f : 0.8f, 0.2f, 0.2f, 1f);
+                      sr.circle(z.pos.x, z.pos.y, 13f);
+                  }
+
+                  // Mobil Cift Joystick UI
+                  sr.setProjectionMatrix(uiCam.combined);
+                  if (movePointer != -1) {
+                      sr.setColor(1f, 1f, 1f, 0.3f);
+                      sr.circle(moveOrigin.x, moveOrigin.y, 60f);
+                      sr.setColor(0.2f, 0.8f, 1f, 0.7f);
+                      sr.circle(moveCurrent.x, moveCurrent.y, 25f);
+                  }
+                  if (aimPointer != -1) {
+                      sr.setColor(1f, 1f, 1f, 0.3f);
+                      sr.circle(aimOrigin.x, aimOrigin.y, 60f);
+                      sr.setColor(1f, 0.3f, 0.3f, 0.7f);
+                      sr.circle(aimCurrent.x, aimCurrent.y, 25f);
+                  }
+                  sr.end();
+              }
+
+              private void handleInput() {
+                  moveInput.setZero();
+                  aimInput.setZero();
+                  float halfW = Gdx.graphics.getWidth() / 2f;
+                  float screenH = Gdx.graphics.getHeight();
+
+                  for (int i = 0; i < 5; i++) {
+                      if (Gdx.input.isTouched(i)) {
+                          float tx = Gdx.input.getX(i);
+                          float ty = screenH - Gdx.input.getY(i);
+
+                          if (tx < halfW && movePointer == -1 && aimPointer != i) {
+                              movePointer = i;
+                              moveOrigin.set(tx, ty);
+                          }
+                          if (tx >= halfW && aimPointer == -1 && movePointer != i) {
+                              aimPointer = i;
+                              aimOrigin.set(tx, ty);
+                          }
+
+                          if (i == movePointer) {
+                              moveCurrent.set(tx, ty);
+                              Vector2 dir = new Vector2(moveCurrent).sub(moveOrigin);
+                              if (dir.len() > 60f) dir.setLength(60f);
+                              moveCurrent.set(moveOrigin).add(dir);
+                              moveInput.set(dir.x / 60f, dir.y / 60f);
+                          } else if (i == aimPointer) {
+                              aimCurrent.set(tx, ty);
+                              Vector2 dir = new Vector2(aimCurrent).sub(aimOrigin);
+                              if (dir.len() > 60f) dir.setLength(60f);
+                              aimCurrent.set(aimOrigin).add(dir);
+                              aimInput.set(dir.x / 60f, dir.y / 60f);
+                          }
+                      } else {
+                          if (i == movePointer) movePointer = -1;
+                          if (i == aimPointer) aimPointer = -1;
+                      }
+                  }
+              }
+
+              private void updateLogic(float dt) {
+                  playerPos.mulAdd(moveInput, playerSpeed * dt);
+
+                  if (aimInput.len2() > 0.1f) {
+                      playerAngle = aimInput.angleDeg();
+                      if (aimInput.len() > 0.8f && attackCooldown <= 0f) {
+                          performMeleeAttack();
+                          attackCooldown = 0.5f;
+                      }
+                  } else if (moveInput.len2() > 0.1f) {
+                      playerAngle = moveInput.angleDeg();
+                  }
+
+                  if (attackCooldown > 0f) attackCooldown -= dt;
+
+                  for (int i = zombies.size - 1; i >= 0; i--) {
+                      Zombie z = zombies.get(i);
+                      if (z.knockbackTimer > 0) {
+                          z.pos.mulAdd(z.knockbackDir, 250f * dt);
+                          z.knockbackTimer -= dt;
+                      } else {
+                          float dist = z.pos.dst(playerPos);
+                          if (dist < 350f && dist > 18f) {
+                              Vector2 dir = new Vector2(playerPos).sub(z.pos).nor();
+                              z.pos.mulAdd(dir, 65f * dt);
+                          }
+                      }
+                      if (z.hp <= 0) zombies.removeIndex(i);
+                  }
+              }
+
+              private void performMeleeAttack() {
+                  for (Zombie z : zombies) {
+                      if (z.pos.dst(playerPos) <= 65f) {
+                          Vector2 toZombie = new Vector2(z.pos).sub(playerPos);
+                          float angleDiff = Math.abs(MathUtils.atan2(toZombie.y, toZombie.x) * MathUtils.radiansToDegrees - playerAngle);
+                          if (angleDiff > 180) angleDiff = 360 - angleDiff;
+                          if (angleDiff <= 45f) {
+                              z.hp -= 35f;
+                              z.knockbackTimer = 0.15f;
+                              z.knockbackDir.set(toZombie).nor();
+                          }
+                      }
+                  }
+              }
+
+              @Override
+              public void dispose() {
+                  sr.dispose();
+              }
+          }
+          EOF
+
+          # 7. APK Derle
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: APK Dosyasini Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zomboid-Mobile-APK
+          path: zomboid_build/android/build/outputs/apk/debug/android-debug.apk

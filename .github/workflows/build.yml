@@ -1,0 +1,162 @@
+name: Tek Dosya Zomboid APK Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depoyu Cek
+        uses: actions/checkout@v4
+
+      - name: JDK 17 Kur
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Android SDK Kur
+        uses: android-actions/setup-android@v3
+
+      - name: LibGDX Projesini Otomatik Olustur ve Tek Dosyayi Entegre Et
+        run: |
+          mkdir build_temp
+          cd build_temp
+          
+          # Android SDK yolunu tanimla
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          
+          # Gradle ve LibGDX proje yapisini tek komutla olustur
+          gradle wrapper --gradle-version 8.5
+          
+          mkdir -p core/src/com/zomboid/game
+          mkdir -p android/src/com/zomboid/game
+          mkdir -p android/res/values
+          
+          # Senin tek ZomboidGame.java dosyani ilgili yere kopyala
+          cp ../ZomboidGame.java core/src/com/zomboid/game/ZomboidGame.java
+          
+          # settings.gradle olustur
+          cat << 'EOF' > settings.gradle
+          include 'core', 'android'
+          EOF
+          
+          # Kok build.gradle olustur
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.1.4'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              ext {
+                  gdxVersion = '1.12.1'
+              }
+          }
+          project(":core") {
+              apply plugin: "java-library"
+              dependencies {
+                  api "com.badlogicgames.gdx:gdx:$gdxVersion"
+              }
+          }
+          project(":android") {
+              apply plugin: "com.android.application"
+              configurations { natives }
+              dependencies {
+                  implementation project(":core")
+                  api "com.badlogicgames.gdx:gdx-backend-android:$gdxVersion"
+                  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-armeabi-v7a"
+                  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-arm64-v8a"
+                  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86"
+                  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86_64"
+              }
+          }
+          EOF
+
+          # Android modul build.gradle olustur
+          cat << 'EOF' > android/build.gradle
+          android {
+              namespace "com.zomboid.game"
+              compileSdk 34
+              sourceSets {
+                  main {
+                      manifest.srcFile 'AndroidManifest.xml'
+                      java.srcDirs = ['src']
+                      res.srcDirs = ['res']
+                      jniLibs.srcDirs = ['libs']
+                  }
+              }
+              defaultConfig {
+                  applicationId "com.zomboid.game"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+          }
+          task copyAndroidNatives {
+              doFirst {
+                  file("libs/armeabi-v7a/").mkdirs()
+                  file("libs/arm64-v8a/").mkdirs()
+                  file("libs/x86_64/").mkdirs()
+                  file("libs/x86/").mkdirs()
+                  configurations.natives.copy().files.each { jar ->
+                      def outputDir = null
+                      if(jar.name.endsWith("natives-armeabi-v7a.jar")) outputDir = file("libs/armeabi-v7a")
+                      if(jar.name.endsWith("natives-arm64-v8a.jar")) outputDir = file("libs/arm64-v8a")
+                      if(jar.name.endsWith("natives-x86_64.jar")) outputDir = file("libs/x86_64")
+                      if(jar.name.endsWith("natives-x86.jar")) outputDir = file("libs/x86")
+                      if(outputDir != null) {
+                          copy {
+                              from zipTree(jar)
+                              into outputDir
+                              include "*.so"
+                          }
+                      }
+                  }
+              }
+          }
+          tasks.whenTaskAdded { packageTask ->
+              if (packageTask.name.contains("merge") && packageTask.name.contains("JniLibFolders")) {
+                  packageTask.dependsOn 'copyAndroidNatives'
+              }
+          }
+          EOF
+
+          # AndroidManifest.xml olustur (Tam ekran ve Yatay mod)
+          cat << 'EOF' > android/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="Project Zomboid Mobile"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+                  <activity
+                      android:name="com.zomboid.game.AndroidLauncher"
+                      android:screenOrientation="landscape"
+                      android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # AndroidLauncher.java ol
